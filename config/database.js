@@ -90,6 +90,8 @@ async function connectDB() {
     try {
       const usersCollection = db.collection('users');
       const projectsCollection = db.collection('projects');
+      const activitiesCollection = db.collection('activities');
+      const notificationsCollection = db.collection('notifications');
       
       // Indexes for users collection
       await usersCollection.createIndex({ uid: 1 }, { unique: true });
@@ -101,7 +103,21 @@ async function connectDB() {
       await projectsCollection.createIndex({ status: 1 });
       await projectsCollection.createIndex({ year: 1 });
       await projectsCollection.createIndex({ createdAt: -1 });
+      await projectsCollection.createIndex({ 'likes.userId': 1 });
+      await projectsCollection.createIndex({ 'bookmarks.userId': 1 });
+      await projectsCollection.createIndex({ likeCount: -1 });
+      await projectsCollection.createIndex({ commentCount: -1 });
       await projectsCollection.createIndex({ title: 'text', abstract: 'text', tags: 'text' }); // Text search index
+      
+      // Indexes for activities collection
+      await activitiesCollection.createIndex({ userId: 1 }, { unique: true });
+      await activitiesCollection.createIndex({ 'recentProjects.viewedAt': -1 });
+      await activitiesCollection.createIndex({ 'bookmarkedProjects.bookmarkedAt': -1 });
+      
+      // Indexes for notifications collection
+      await notificationsCollection.createIndex({ userId: 1, read: 1, createdAt: -1 });
+      await notificationsCollection.createIndex({ userId: 1, createdAt: -1 });
+      await notificationsCollection.createIndex({ projectId: 1 });
       
       console.log('✅ Database indexes created/verified successfully!');
     } catch (indexError) {
@@ -198,11 +214,49 @@ async function getProjectsCollection() {
   }
 }
 
+async function getActivitiesCollection() {
+  try {
+    await ensureConnection();
+    const db = getDB();
+    if (!db) {
+      throw new Error('Database not available');
+    }
+    const collection = db.collection('activities');
+    if (!collection) {
+      throw new Error('Activities collection not available');
+    }
+    return collection;
+  } catch (error) {
+    console.error('Error getting activities collection:', error);
+    throw error;
+  }
+}
+
+async function getNotificationsCollection() {
+  try {
+    await ensureConnection();
+    const db = getDB();
+    if (!db) {
+      throw new Error('Database not available');
+    }
+    const collection = db.collection('notifications');
+    if (!collection) {
+      throw new Error('Notifications collection not available');
+    }
+    return collection;
+  } catch (error) {
+    console.error('Error getting notifications collection:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   connectDB,
   getDB,
   getUsersCollection,
   getProjectsCollection,
+  getActivitiesCollection,
+  getNotificationsCollection,
   ensureConnection,
   ObjectId,
   isConnected: () => isConnected,

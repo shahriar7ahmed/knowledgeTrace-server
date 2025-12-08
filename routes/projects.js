@@ -405,5 +405,787 @@ router.put('/:id/status', verifyToken, async (req, res) => {
   }
 });
 
+// Helper function to create notification
+async function createNotification(notificationData) {
+  try {
+    const { getNotificationsCollection } = require('../config/database');
+    const { getUsersCollection } = require('../config/database');
+    const notificationsCollection = await getNotificationsCollection();
+    const usersCollection = await getUsersCollection();
+    
+    // Get user info for notification
+    const relatedUser = await usersCollection.findOne({ uid: notificationData.relatedUserId });
+    
+    const notification = {
+      userId: notificationData.userId,
+      type: notificationData.type,
+      relatedUserId: notificationData.relatedUserId,
+      relatedUserName: relatedUser?.name || relatedUser?.displayName || 'Someone',
+      relatedUserPhotoURL: relatedUser?.photoURL || '',
+      projectId: notificationData.projectId,
+      projectTitle: notificationData.projectTitle || '',
+      commentId: notificationData.commentId || null,
+      message: notificationData.message || '',
+      read: false,
+      createdAt: new Date(),
+    };
+
+    await notificationsCollection.insertOne(notification);
+  } catch (error) {
+    console.error('Error creating notification:', error);
+    // Don't throw - notifications are non-critical
+  }
+}
+
+// Like/Unlike project
+router.post('/:id/like', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    // Initialize likes array if it doesn't exist
+    if (!project.likes) {
+      project.likes = [];
+    }
+
+    const userId = req.user.uid;
+    const existingLikeIndex = project.likes.findIndex(like => like.userId === userId);
+    let liked = false;
+
+    if (existingLikeIndex >= 0) {
+      // Unlike: remove from array
+      project.likes.splice(existingLikeIndex, 1);
+    } else {
+      // Like: add to array
+      project.likes.push({ userId, likedAt: new Date() });
+      liked = true;
+
+      // Create notification for project owner (if not the liker)
+      if (project.authorId && project.authorId !== userId) {
+        await createNotification({
+          userId: project.authorId,
+          type: 'like',
+          relatedUserId: userId,
+          projectId: project._id,
+          projectTitle: project.title,
+          message: `${req.user.name || 'Someone'} liked your paper "${project.title}"`,
+        });
+      }
+    }
+
+    const likeCount = project.likes.length;
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          likes: project.likes,
+          likeCount: likeCount,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    res.json({ 
+      liked,
+      likeCount,
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error toggling like:', error);
+    res.status(500).json({ message: 'Error toggling like' });
+  }
+});
+
+// Bookmark/Unbookmark project
+router.post('/:id/bookmark', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    const { getActivitiesCollection } = require('../config/database');
+    const activitiesCollection = await getActivitiesCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    // Initialize bookmarks array if it doesn't exist (for older projects)
+    if (!project.bookmarks) {
+      project.bookmarks = [];
+    }
+
+    const userId = req.user.uid;
+    const existingBookmarkIndex = project.bookmarks.findIndex(b => b.userId === userId);
+    let bookmarked = false;
+
+    if (existingBookmarkIndex >= 0) {
+      // Unbookmark: remove from array
+      project.bookmarks.splice(existingBookmarkIndex, 1);
+      
+      // Remove from user's activity
+      await activitiesCollection.updateOne(
+        { userId },
+        { 
+          $pull: { bookmarkedProjects: { projectId: project._id } },
+          $set: { updatedAt: new Date() }
+        },
+        { upsert: true }
+      );
+    } else {
+      // Bookmark: add to array
+      project.bookmarks.push({ userId, bookmarkedAt: new Date() });
+      bookmarked = true;
+
+      // Add to user's activity
+      await activitiesCollection.updateOne(
+        { userId },
+        { 
+          $addToSet: { 
+            bookmarkedProjects: { 
+              projectId: project._id,
+              bookmarkedAt: new Date()
+            } 
+          },
+          $setOnInsert: { userId, createdAt: new Date() },
+          $set: { updatedAt: new Date() }
+        },
+        { upsert: true }
+      );
+    }
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          bookmarks: project.bookmarks,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    res.json({ 
+      bookmarked,
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error toggling bookmark:', error);
+    res.status(500).json({ message: 'Error toggling bookmark' });
+  }
+});
+
+// Track view
+router.post('/:id/view', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    const { getActivitiesCollection } = require('../config/database');
+    const activitiesCollection = await getActivitiesCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    const userId = req.user.uid;
+
+    // Increment view count
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $inc: { views: 1 },
+        $set: { updatedAt: new Date() }
+      }
+    );
+
+    // Add to user's recent projects (limit to 10 most recent)
+    await activitiesCollection.updateOne(
+      { userId },
+      { 
+        $pull: { recentProjects: { projectId: project._id } },
+        $push: {
+          recentProjects: {
+            $each: [{ projectId: project._id, projectTitle: project.title, viewedAt: new Date() }],
+            $slice: -10 // Keep only last 10
+          }
+        },
+        $setOnInsert: { userId, createdAt: new Date() },
+        $set: { lastActivity: new Date(), updatedAt: new Date() }
+      },
+      { upsert: true }
+    );
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    res.json({ 
+      views: (updatedProject.views || 0) + 1,
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error tracking view:', error);
+    res.status(500).json({ message: 'Error tracking view' });
+  }
+});
+
+// Delete project (owner only)
+router.delete('/:id', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    
+    // Check if user is admin
+    const user = await usersCollection.findOne({ uid: req.user.uid });
+    const isAdmin = user?.isAdmin || false;
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    // Check if user is admin or project owner
+    if (!isAdmin && project.authorId !== req.user.uid) {
+      return res.status(403).json({ message: 'Access denied. Only project owners can delete projects.' });
+    }
+
+    // Delete project
+    await projectsCollection.deleteOne({ _id: project._id });
+
+    res.json({ message: 'Project deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting project:', error);
+    res.status(500).json({ message: 'Error deleting project' });
+  }
+});
+
+// Add comment
+router.post('/:id/comments', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: 'Comment content is required' });
+    }
+
+    // Get user info
+    const user = await usersCollection.findOne({ uid: req.user.uid });
+    
+    // Initialize comments array if it doesn't exist (for older projects)
+    if (!project.comments) {
+      project.comments = [];
+    }
+    if (project.commentCount === undefined) {
+      project.commentCount = project.comments.length || 0;
+    }
+
+    const newComment = {
+      _id: new ObjectId(),
+      userId: req.user.uid,
+      userName: user?.name || user?.displayName || 'Anonymous',
+      userPhotoURL: user?.photoURL || '',
+      content: content.trim(),
+      replies: [],
+      createdAt: new Date(),
+    };
+
+    project.comments.push(newComment);
+    project.commentCount = project.comments.length;
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          comments: project.comments,
+          commentCount: project.commentCount,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Create notification for project owner (if not the commenter)
+    if (project.authorId && project.authorId !== req.user.uid) {
+      await createNotification({
+        userId: project.authorId,
+        type: 'comment',
+        relatedUserId: req.user.uid,
+        projectId: project._id,
+        projectTitle: project.title,
+        commentId: newComment._id,
+        message: `${newComment.userName} commented on your paper "${project.title}"`,
+      });
+    }
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    res.status(201).json({ 
+      comment: commentForResponse,
+      commentCount: project.commentCount,
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error adding comment:', error);
+    res.status(500).json({ message: 'Error adding comment' });
+  }
+});
+
+// Edit comment
+router.put('/:id/comments/:commentId', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project || !project.comments) {
+      return res.status(404).json({ message: 'Project or comment not found' });
+    }
+
+    const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: 'Comment content is required' });
+    }
+
+    const commentId = ObjectId.isValid(req.params.commentId) ? new ObjectId(req.params.commentId) : req.params.commentId;
+    const commentIndex = project.comments.findIndex(c => 
+      (c._id && c._id.toString() === commentId.toString()) || c._id === commentId
+    );
+
+    if (commentIndex === -1) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    // Check if user is comment owner or project owner or admin
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    const user = await usersCollection.findOne({ uid: req.user.uid });
+    const isAdmin = user?.isAdmin || false;
+
+    if (project.comments[commentIndex].userId !== req.user.uid && 
+        project.authorId !== req.user.uid && 
+        !isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Update comment
+    project.comments[commentIndex].content = content.trim();
+    project.comments[commentIndex].updatedAt = new Date();
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          comments: project.comments,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    
+    // Prepare comment for response (ensure ObjectId is serialized)
+    const updatedComment = {
+      ...project.comments[commentIndex],
+      _id: project.comments[commentIndex]._id?.toString() || project.comments[commentIndex]._id,
+    };
+    
+    res.json({ 
+      comment: updatedComment,
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error editing comment:', error);
+    res.status(500).json({ message: 'Error editing comment' });
+  }
+});
+
+// Delete comment
+router.delete('/:id/comments/:commentId', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project || !project.comments) {
+      return res.status(404).json({ message: 'Project or comment not found' });
+    }
+
+    const commentId = ObjectId.isValid(req.params.commentId) ? new ObjectId(req.params.commentId) : req.params.commentId;
+    const commentIndex = project.comments.findIndex(c => 
+      (c._id && c._id.toString() === commentId.toString()) || c._id === commentId
+    );
+
+    if (commentIndex === -1) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    // Check if user is comment owner or project owner or admin
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    const user = await usersCollection.findOne({ uid: req.user.uid });
+    const isAdmin = user?.isAdmin || false;
+
+    if (project.comments[commentIndex].userId !== req.user.uid && 
+        project.authorId !== req.user.uid && 
+        !isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Remove comment
+    project.comments.splice(commentIndex, 1);
+    project.commentCount = project.comments.length;
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          comments: project.comments,
+          commentCount: project.commentCount,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    res.json({ 
+      message: 'Comment deleted successfully',
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error deleting comment:', error);
+    res.status(500).json({ message: 'Error deleting comment' });
+  }
+});
+
+// Add reply to comment
+router.post('/:id/comments/:commentId/replies', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project || !project.comments) {
+      return res.status(404).json({ message: 'Project or comment not found' });
+    }
+
+    const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: 'Reply content is required' });
+    }
+
+    const commentId = ObjectId.isValid(req.params.commentId) ? new ObjectId(req.params.commentId) : req.params.commentId;
+    const commentIndex = project.comments.findIndex(c => 
+      (c._id && c._id.toString() === commentId.toString()) || c._id === commentId
+    );
+
+    if (commentIndex === -1) {
+      return res.status(404).json({ message: 'Comment not found' });
+    }
+
+    // Get user info
+    const user = await usersCollection.findOne({ uid: req.user.uid });
+    
+    // Initialize replies array if it doesn't exist
+    if (!project.comments[commentIndex].replies) {
+      project.comments[commentIndex].replies = [];
+    }
+
+    const newReply = {
+      _id: new ObjectId(),
+      userId: req.user.uid,
+      userName: user?.name || user?.displayName || 'Anonymous',
+      userPhotoURL: user?.photoURL || '',
+      content: content.trim(),
+      createdAt: new Date(),
+    };
+
+    project.comments[commentIndex].replies.push(newReply);
+    
+    // Prepare reply for response (convert ObjectId to string)
+    const replyForResponse = {
+      ...newReply,
+      _id: newReply._id.toString(),
+    };
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          comments: project.comments,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Create notification for comment owner (if not the replier)
+    if (project.comments[commentIndex].userId !== req.user.uid) {
+      await createNotification({
+        userId: project.comments[commentIndex].userId,
+        type: 'reply',
+        relatedUserId: req.user.uid,
+        projectId: project._id,
+        projectTitle: project.title,
+        commentId: commentId,
+        message: `${newReply.userName} replied to your comment on "${project.title}"`,
+      });
+    }
+
+    // Also notify project owner if different from comment owner and replier
+    if (project.authorId && 
+        project.authorId !== req.user.uid && 
+        project.authorId !== project.comments[commentIndex].userId) {
+      await createNotification({
+        userId: project.authorId,
+        type: 'reply',
+        relatedUserId: req.user.uid,
+        projectId: project._id,
+        projectTitle: project.title,
+        commentId: commentId,
+        message: `${newReply.userName} replied to a comment on your paper "${project.title}"`,
+      });
+    }
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    res.status(201).json({ 
+      reply: replyForResponse,
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error adding reply:', error);
+    res.status(500).json({ message: 'Error adding reply' });
+  }
+});
+
+// Edit reply
+router.put('/:id/comments/:commentId/replies/:replyId', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project || !project.comments) {
+      return res.status(404).json({ message: 'Project or comment not found' });
+    }
+
+    const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: 'Reply content is required' });
+    }
+
+    const commentId = ObjectId.isValid(req.params.commentId) ? new ObjectId(req.params.commentId) : req.params.commentId;
+    const replyId = ObjectId.isValid(req.params.replyId) ? new ObjectId(req.params.replyId) : req.params.replyId;
+    
+    const commentIndex = project.comments.findIndex(c => 
+      (c._id && c._id.toString() === commentId.toString()) || c._id === commentId
+    );
+
+    if (commentIndex === -1 || !project.comments[commentIndex].replies) {
+      return res.status(404).json({ message: 'Comment or reply not found' });
+    }
+
+    const replyIndex = project.comments[commentIndex].replies.findIndex(r => 
+      (r._id && r._id.toString() === replyId.toString()) || r._id === replyId
+    );
+
+    if (replyIndex === -1) {
+      return res.status(404).json({ message: 'Reply not found' });
+    }
+
+    // Check if user is reply owner or comment owner or project owner or admin
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    const user = await usersCollection.findOne({ uid: req.user.uid });
+    const isAdmin = user?.isAdmin || false;
+
+    if (project.comments[commentIndex].replies[replyIndex].userId !== req.user.uid && 
+        project.comments[commentIndex].userId !== req.user.uid &&
+        project.authorId !== req.user.uid && 
+        !isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Update reply
+    project.comments[commentIndex].replies[replyIndex].content = content.trim();
+    project.comments[commentIndex].replies[replyIndex].updatedAt = new Date();
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          comments: project.comments,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    
+    // Prepare reply for response (ensure ObjectId is serialized)
+    const updatedReply = {
+      ...project.comments[commentIndex].replies[replyIndex],
+      _id: project.comments[commentIndex].replies[replyIndex]._id?.toString() || project.comments[commentIndex].replies[replyIndex]._id,
+    };
+    
+    res.json({ 
+      reply: updatedReply,
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error editing reply:', error);
+    res.status(500).json({ message: 'Error editing reply' });
+  }
+});
+
+// Delete reply
+router.delete('/:id/comments/:commentId/replies/:replyId', verifyToken, async (req, res) => {
+  try {
+    const projectsCollection = await getProjectsCollection();
+    
+    let project;
+    if (ObjectId.isValid(req.params.id)) {
+      project = await projectsCollection.findOne({ _id: new ObjectId(req.params.id) });
+    } else {
+      project = await projectsCollection.findOne({ _id: req.params.id });
+    }
+
+    if (!project || !project.comments) {
+      return res.status(404).json({ message: 'Project or comment not found' });
+    }
+
+    const commentId = ObjectId.isValid(req.params.commentId) ? new ObjectId(req.params.commentId) : req.params.commentId;
+    const replyId = ObjectId.isValid(req.params.replyId) ? new ObjectId(req.params.replyId) : req.params.replyId;
+    
+    const commentIndex = project.comments.findIndex(c => 
+      (c._id && c._id.toString() === commentId.toString()) || c._id === commentId
+    );
+
+    if (commentIndex === -1 || !project.comments[commentIndex].replies) {
+      return res.status(404).json({ message: 'Comment or reply not found' });
+    }
+
+    const replyIndex = project.comments[commentIndex].replies.findIndex(r => 
+      (r._id && r._id.toString() === replyId.toString()) || r._id === replyId
+    );
+
+    if (replyIndex === -1) {
+      return res.status(404).json({ message: 'Reply not found' });
+    }
+
+    // Check if user is reply owner or comment owner or project owner or admin
+    const { getUsersCollection } = require('../config/database');
+    const usersCollection = await getUsersCollection();
+    const user = await usersCollection.findOne({ uid: req.user.uid });
+    const isAdmin = user?.isAdmin || false;
+
+    if (project.comments[commentIndex].replies[replyIndex].userId !== req.user.uid && 
+        project.comments[commentIndex].userId !== req.user.uid &&
+        project.authorId !== req.user.uid && 
+        !isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Remove reply
+    project.comments[commentIndex].replies.splice(replyIndex, 1);
+
+    // Update project
+    await projectsCollection.updateOne(
+      { _id: project._id },
+      { 
+        $set: { 
+          comments: project.comments,
+          updatedAt: new Date() 
+        } 
+      }
+    );
+
+    // Get updated project
+    const updatedProject = await projectsCollection.findOne({ _id: project._id });
+    res.json({ 
+      message: 'Reply deleted successfully',
+      project: new Project(updatedProject).toJSON()
+    });
+  } catch (error) {
+    console.error('Error deleting reply:', error);
+    res.status(500).json({ message: 'Error deleting reply' });
+  }
+});
+
 module.exports = router;
 

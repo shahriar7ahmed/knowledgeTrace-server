@@ -15,6 +15,14 @@ class Project {
     this.status = data.status || 'pending'; // pending, approved, rejected
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
+    
+    // Engagement fields
+    this.likes = Array.isArray(data.likes) ? data.likes : [];
+    this.likeCount = data.likeCount !== undefined ? data.likeCount : (data.likes?.length || 0);
+    this.comments = Array.isArray(data.comments) ? data.comments : [];
+    this.commentCount = data.commentCount !== undefined ? data.commentCount : (data.comments?.length || 0);
+    this.views = data.views !== undefined ? data.views : 0;
+    this.bookmarks = Array.isArray(data.bookmarks) ? data.bookmarks : [];
   }
 
   toJSON() {
@@ -33,6 +41,12 @@ class Project {
       status: this.status,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
+      likes: this.likes,
+      likeCount: this.likeCount,
+      comments: this.comments,
+      commentCount: this.commentCount,
+      views: this.views,
+      bookmarks: this.bookmarks,
     };
   }
 }

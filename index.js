@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const { connectDB } = require('./config/database');
+const { verifyToken } = require('./middleware/auth');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -139,6 +140,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const userRoutes = require('./routes/users');
 const projectRoutes = require('./routes/projects');
 const adminRoutes = require('./routes/admin');
+const activityRoutes = require('./routes/activity');
+const notificationRoutes = require('./routes/notifications');
 
 // Apply rate limiting to user routes, but exclude GET /profile from strict limiting
 // (it's a read-only operation that's called frequently)
@@ -152,6 +155,8 @@ app.use('/api/users', (req, res, next) => {
 }, userRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/admin', authRateLimit, adminRoutes);
+app.use('/api/activity', activityRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Health check endpoint
 app.get('/', (req, res) => {
