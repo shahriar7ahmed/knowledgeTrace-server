@@ -117,8 +117,39 @@ const projectQuerySchema = Joi.object({
     page: Joi.number().integer().min(1).default(1).optional(),
 });
 
+/**
+ * Validation schema for comment/reply content
+ */
+const commentContentSchema = Joi.object({
+    content: Joi.string()
+        .trim()
+        .min(1)
+        .max(2000)
+        .required()
+        .messages({
+            'string.empty': 'Comment content is required',
+            'string.min': 'Comment must be at least 1 character long',
+            'string.max': 'Comment must not exceed 2000 characters',
+        }),
+});
+
+/**
+ * Validation schema for MongoDB ObjectId parameters
+ */
+const objectIdSchema = Joi.object({
+    id: Joi.string()
+        .pattern(/^[0-9a-fA-F]{24}$/)
+        .required()
+        .messages({
+            'string.pattern.base': 'Invalid ID format',
+            'any.required': 'ID is required',
+        }),
+});
+
 module.exports = {
     createProjectSchema,
     updateProjectStatusSchema,
     projectQuerySchema,
+    commentContentSchema,
+    objectIdSchema,
 };

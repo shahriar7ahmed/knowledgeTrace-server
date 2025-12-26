@@ -11,6 +11,13 @@ class User {
     this.skills = data.skills || [];
     this.github = data.github || '';
     this.linkedin = data.linkedin || '';
+    this.bio = data.bio || '';
+    this.headline = data.headline || '';
+    this.socialLinks = data.socialLinks || {
+      github: data.github || '',
+      linkedin: data.linkedin || '',
+      website: data.website || ''
+    };
     this.isAdmin = data.isAdmin || false;
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
@@ -28,6 +35,9 @@ class User {
       skills: Array.isArray(this.skills) ? this.skills : (this.skills ? this.skills.split(',').map(s => s.trim()) : []),
       github: this.github,
       linkedin: this.linkedin,
+      bio: this.bio,
+      headline: this.headline,
+      socialLinks: this.socialLinks,
       isAdmin: this.isAdmin,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,

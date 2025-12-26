@@ -7,8 +7,10 @@ const { validate } = require('../middleware/validate');
 const { createUserSchema, updateUserProfileSchema } = require('../validators/userValidator');
 
 // User routes with validation
-router.get('/profile', verifyToken, userController.getUserProfile);
+// IMPORTANT: Specific routes must come before parameterized routes
+router.get('/profile', verifyToken, userController.getUserProfile); // Authenticated user's profile
 router.post('/', verifyToken, validate(createUserSchema), userController.createOrUpdateUser);
 router.put('/profile', verifyToken, validate(updateUserProfileSchema), userController.updateUserProfile);
+router.get('/:id', userController.getPublicUserProfile); // Public profile (no auth required)
 
 module.exports = router;
