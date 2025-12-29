@@ -159,6 +159,12 @@ const activityRoutes = require('./routes/activity');
 const notificationRoutes = require('./routes/notifications');
 const collabRoutes = require('./routes/collab');
 
+// Thesis Management Routes (New)
+const thesisRoutes = require('./routes/thesis');
+const workflowRoutes = require('./routes/workflow');
+const teamRoutes = require('./routes/teams');
+const supervisorRoutes = require('./routes/supervisors');
+
 // Apply rate limiting to user routes, but exclude GET /profile from strict limiting
 // (it's a read-only operation that's called frequently)
 app.use('/api/users', (req, res, next) => {
@@ -169,11 +175,19 @@ app.use('/api/users', (req, res, next) => {
   // Other user routes use stricter rate limiting
   return authRateLimit(req, res, next);
 }, userRoutes);
+
 app.use('/api/projects', projectRoutes);
 app.use('/api/collab', collabRoutes); // Collaboration routes
 app.use('/api/admin', authRateLimit, adminRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/notifications', notificationRoutes);
+
+// Thesis Management Routes
+app.use('/api/thesis', thesisRoutes);
+app.use('/api/workflow', workflowRoutes);
+app.use('/api/teams', teamRoutes);
+app.use('/api/supervisors', supervisorRoutes);
+
 
 // Health check endpoint
 app.get('/', (req, res) => {

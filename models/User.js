@@ -1,4 +1,4 @@
-// User model/schema for MongoDB
+// User model/schema for MongoDB with RBAC and enhanced features
 class User {
   constructor(data = {}) {
     this.uid = data.uid || ''; // Firebase UID
@@ -8,7 +8,7 @@ class User {
     this.photoURL = data.photoURL || '';
     this.department = data.department || '';
     this.year = data.year || '';
-    this.skills = data.skills || [];
+    this.skills = data.skills || []; // For team matching (Module C)
     this.github = data.github || '';
     this.linkedin = data.linkedin || '';
     this.bio = data.bio || '';
@@ -18,9 +18,46 @@ class User {
       linkedin: data.linkedin || '',
       website: data.website || ''
     };
-    this.isAdmin = data.isAdmin || false;
+
+    // RBAC fields
+    this.role = data.role || 'student'; // 'student' | 'supervisor' | 'admin'
+    this.isAdmin = data.isAdmin || false; // Legacy, kept for backward compatibility
+
+    // Supervisor-specific fields
+    this.researchAreas = data.researchAreas || []; // Research interests for matching
+    this.maxStudents = data.maxStudents || null; // Optional limit on supervised students
+    this.supervisedProjects = data.supervisedProjects || []; // Array of project IDs
+
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
+  }
+
+  /**
+   * Validates if email is from authorized IIUC domain
+   * @param {string} email - Email to validate
+   * @returns {boolean}
+   */
+  static validateEmail(email) {
+    const allowedDomains = ['@ugrad.iiuc.ac.bd'];
+    return allowedDomains.some(domain => email.toLowerCase().endsWith(domain));
+  }
+
+  /**
+   * Checks if user has a specific role
+   * @param {string|string[]} allowedRoles - Role(s) to check against
+   * @returns {boolean}
+   */
+  hasRole(allowedRoles) {
+    const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
+    return roles.includes(this.role);
+  }
+
+  /**
+   * Checks if user is a supervisor
+   * @returns {boolean}
+   */
+  isSupervisor() {
+    return this.role === 'supervisor';
   }
 
   toJSON() {
@@ -38,7 +75,11 @@ class User {
       bio: this.bio,
       headline: this.headline,
       socialLinks: this.socialLinks,
+      role: this.role,
       isAdmin: this.isAdmin,
+      researchAreas: this.researchAreas,
+      maxStudents: this.maxStudents,
+      supervisedProjects: this.supervisedProjects,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };
@@ -46,4 +87,5 @@ class User {
 }
 
 module.exports = User;
+
 
